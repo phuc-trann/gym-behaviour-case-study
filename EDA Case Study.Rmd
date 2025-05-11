@@ -1,0 +1,630 @@
+# %% [code]
+---
+title: "Exploratory Data Analysis Case Study"
+author: "Phuc Tran"
+date: "2025-04-20"
+output: 
+  html_document:
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+# Global chunk options
+knitr::opts_chunk$set(echo = FALSE,
+                      message=FALSE, 
+                      warning=FALSE,
+                      fig.width = 6,
+                      fig.height = 3)
+
+# Load necessary libraries
+library(tidyverse)
+library(corrplot)
+library(Metrics)
+library(caret)
+library(catboost)
+
+# Set ggplot theme defaults for centered titles
+theme_update(plot.title = element_text(hjust = 0.5))
+```
+
+# Executive Summary
+
+This report details the analysis of the gym dataset, containing exercise tracking information for 973 gym member sessions. The primary goal was to understand the factors influencing workout outcomes, explore behavioral patterns, and assess the predictability of key metrics using various modeling techniques, including linear models and CatBoost gradient boosting.
+
+Key findings reveal that workout duration and average heart rate (intensity) are the strongest drivers of calories burned, alongside member weight and workout type. Member experience level significantly correlates with increased workout frequency and duration. We observed expected gender differences in body composition metrics (Fat % and BMI) within this population.
+
+Linear regression models and CatBoost demonstrated high predictive accuracy for calories burned, with detailed performance metrics presented in the Evaluation section. CatBoost potentially offered slightly better performance by handling feature interactions and non-linearities inherently. The features identified during exploratory analysis proved crucial across models.
+
+# 1. Problem Identification and Understanding
+
+This dataset provides information on gym members' demographics, physical stats, heart rate metrics during workouts, and workout behaviors.
+
+**Data Science Problems:**
+
+Based on the available data, we aim to investigate the following:
+
+* Relationship Analysis: How do factors like Age, Gender, Weight, Workout_Type, Session_Duration, and Avg_BPM influence the number of Calories_Burned during a workout session? Calories burned is a key metric for members tracking weight management or workout effectiveness. Understanding which factors significantly impact it allows for better workout planning, realistic goal setting, and personalized recommendations by trainers or fitness apps. It also helps compare the relative energy expenditure of different workout types.
+* Predictive Modeling: Can we build a model to accurately predict Calories_Burned based on member characteristics and workout parameters? Which features are most important for this prediction? A reliable predictive model for calorie burn, using easily measurable inputs, offers practical value. It could provide estimations for members without specialized tracking devices, enhance fitness app features, and help gyms demonstrate the potential impact of different workout regimens. Identifying key predictors further refines our understanding of what truly drives calorie expenditure.
+* Comparative Analysis (Health Metrics): Are there significant differences in Fat_Percentage and BMI between Males and Females? How do these metrics correlate with Age and Resting_BPM (as a proxy for cardiovascular fitness)? Understanding the health profile (BMI, Fat %) of the gym's demographic subgroups (like gender) is essential for tailoring programs and health initiatives. Investigating correlations with age and resting heart rate (a basic fitness indicator) can reveal insights into the general fitness levels and potential health risks within different segments of the member base.
+* Behavioral Pattern Analysis: Does Experience_Level correlate with Workout_Frequenc, Session_Duration, or the type of Workout_Type chosen? Do more experienced members train differently? Member engagement and progression are vital for gym retention. Analyzing how workout habits (frequency, duration, type) differ across experience levels helps understand the member journey. Insights can inform targeted strategies for onboarding beginners, keeping intermediate members engaged, and supporting advanced members effectively.
+* Workout Intensity Factors: What factors (e.g., Age, Experience_Level, Workout_Type, Gender) are associated with higher workout intensity, measured by Avg_BPM relative to Max_BPM or Resting_BPM? Workout intensity is crucial for achieving specific fitness goals (e.g., cardiovascular improvement vs. endurance). Identifying factors associated with higher average heart rates (like workout type or potentially member characteristics) allows for better guidance on selecting activities that align with desired intensity levels and fitness objectives.
+
+# 2. Data Preprocessing
+
+In this stage, we prepare the data for analysis by checking its integrity, handling missing values (if any), and ensuring correct data types.
+
+## Load and preview the dataset
+
+```{r}
+# Load the dataset
+gym_raw <- read.csv("/kaggle/input/gym-members-exercise-dataset/gym_members_exercise_tracking.csv")
+
+# Clean column names
+colnames(gym_raw) <- make.names(colnames(gym_raw))
+
+# Preview the structure of the dataset
+head(gym_raw)
+dim(gym_raw)
+str(gym_raw)
+```
+The dataset contains 973 observations and 15 variables, divided into the following groups:
+* Demographics & Physical Stats: age, gender, weight, height, BMI, fat_percentage
+* Heart Rate Metrics: max_bpm, avg_bpm, resting_bpm
+* Workout Behavior: session duration, workout_type, workout_frequency, experience level
+* Other Factors: calories burnt, water_intake
+
+## Rename columns for clarity
+
+Some columns contain unit metrics such as kg, m, etc. The metrics will be removed for cleaner columns names.
+
+```{r}
+# Rename columns to remove unit metrics for clarity
+gym <- gym_raw %>%
+  rename(
+    Weight = Weight..kg.,
+    Height = Height..m.,
+    Session_Duration = Session_Duration..hours.,
+    Water_Intake = Water_Intake..liters.,
+    Workout_Frequency = Workout_Frequency..days.week.
+  )
+
+# Check the updated column names
+colnames(gym)
+```
+
+## Check for missing values in each column
+
+```{r}
+# Produce total missing values in each column
+colSums(is.na(gym))
+```
+
+The dataset is cleaned without any missing values.
+
+## Convert certain columns data type
+
+Ensure categorical columns are formatted as factors.
+
+```{r}
+# Convert Gender and Workout_Type to factors
+gym$Gender <- as.factor(gym$Gender)
+gym$Workout_Type <- as.factor(gym$Workout_Type)
+
+# Check the column types 
+str(gym)                                                                                                    
+```
+
+## Summary statistics
+
+```{r}
+summary(gym)
+```
+
+* Most variables have reasonable ranges.
+* Calories_Burned & BMI show wide ranges, indicating potential outliers but retained for EDA and modeling.
+
+# 3. EDA
+
+**Planned EDA Techniques:**
+
+To identify patterns, outliers, and correlations, we plan to implement the following techniques:
+
+* Summary statistics and histograms: For continuous variables to understand distributions, central tendencies, spread, and identify potential outliers or skewness (e.g., Calories_Burned, Age, Avg_BPM).
+* Bar charts: For categorical features (Gender, Workout_Type, Experience_Level) to visualize frequency distributions and identify the most common categories.
+* Box plots: To compare distributions of continuous variables across different categories (e.g., Calories_Burned by Workout_Type or Gender).
+* Scatter plots: To visualize relationships between pairs of continuous variables (e.g., Calories_Burned vs Session_Duration..hours.).
+* Correlation heatmaps: To explore linear relationships and multicollinearity among multiple numerical features simultaneously.
+
+## Distribution of Key Variables
+
+```{r}
+# Histogram for Calories Burned
+ggplot(gym, aes(x = Calories_Burned)) +
+      geom_histogram(binwidth = 100, fill="skyblue", color="black", alpha = 0.7) +
+      labs(title = "Distribution of Calories Burned", x = "Calories Burned", y = "Count") +
+      theme_minimal()
+
+# Histogram for Average BPM
+ggplot(gym, aes(x = Avg_BPM)) +
+      geom_histogram(binwidth = 5, fill="lightcoral", color="black", alpha = 0.7) +
+      labs(title = "Distribution of Average BPM", x = "Average BPM", y = "Count") +
+      theme_minimal()
+
+# Histogram for Session Duration
+ggplot(gym, aes(x = Session_Duration)) +
+      geom_histogram(binwidth = 0.1, fill="lightgreen", color="black", alpha = 0.7) +
+      labs(title = "Distribution of Session Duration (hours)", x = "Session Duration (hours)", y = "Count") +
+      theme_minimal()
+```
+
+-   Calories Burned Insights: The distribution is roughly bell-shaped but skewed slightly to the right, peaking around 900-1000 calories per session. Most workouts fall between 700 and 1200 calories, though a significant tail extends above 1500, indicating some highly intense sessions.
+-   Average BPM Insights: The distribution is relatively flat across the 135-160 BPM range, lacking a single strong peak. This suggests members engage in workouts covering a wide spectrum of average cardiovascular intensities, likely influenced by the mix of workout types undertaken.
+-   Session Duration Insights: The distribution appears bimodal, with common durations clustering around 1.1-1.2 hours and again around 1.3-1.4 hours. This indicates members might commonly aim for sessions slightly over an hour or closer to an hour and a half, rather than a single typical duration. The range spans from 30 minutes to 2 hours.
+
+## Categorical Variable Distributions
+
+```{r}
+# Bar chart for Gender
+ggplot(gym, aes(x = Gender, fill = Gender)) +
+  geom_bar(alpha=0.8) +
+  labs(title = "Distribution of Gender", x = "Gender", y = "Count") +
+  theme_minimal()
+
+# Bar chart for Workout Type
+ggplot(gym, aes(x = fct_infreq(Workout_Type), fill = Workout_Type)) + # Order by frequency
+  geom_bar(alpha=0.8) +
+  labs(title = "Distribution of Workout Type", x = "Workout Type", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 1))
+
+# Bar chart for Experience Level
+ggplot(gym, aes(x = factor(Experience_Level), fill = factor(Experience_Level))) +
+  geom_bar(alpha=0.8) +
+  labs(title = "Distribution of Experience Level", x = "Experience Level", y = "Count") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Oranges", name = "Experience Lvl") # Use a palette
+```
+
+* Gender Insights: The dataset contains a relatively balanced number of male (\~500) and female (\~470) observations.
+* Workout Type Insights: All four workout types (Strength, Cardio, Yoga, HIIT) are popular and similarly represented, with counts ranging from approximately 225 (HIIT) to 255 (Strength). This suggests a diverse range of activities within the population studied.
+* Experience Level Insights: Level 2 (intermediate) is the most common (\~400 members), followed by Level 1 (beginner, \~370 members). Level 3 (advanced) members constitute the smallest group (\~200 members).
+
+## Relationship and Correlation
+
+```{r}
+# Calories Burned vs Session Duration (Color by Workout Type)
+ggplot(gym, aes(x = Session_Duration, y = Calories_Burned)) +
+  geom_point(aes(color = Workout_Type), alpha = 0.6) +
+  geom_smooth(method = "lm", color = "black", se = FALSE) + # Overall trend
+  labs(title = "Calories Burned vs. Session Duration",
+       x = "Session Duration (hours)", y = "Calories Burned") +
+  theme_minimal()
+
+# Calories Burned vs Average BPM (Color by Workout Type)
+ggplot(gym, aes(x = Avg_BPM, y = Calories_Burned)) +
+  geom_point(aes(color = Workout_Type), alpha = 0.6) +
+  geom_smooth(method = "lm", color = "black", se = FALSE) +
+  labs(title = "Calories Burned vs. Average BPM",
+       x = "Average BPM during Workout", y = "Calories Burned") +
+  theme_minimal()
+```
+
+* Calories vs. Duration Insights: There is a strong positive linear trend: longer sessions equal more calories burned. However, the significant vertical spread for any given duration highlights the crucial role of other factors, primarily intensity (Avg_BPM) and individual characteristics (Weight), in determining the final calorie count. Workout types are distributed across all durations.
+* Calories vs. Avg BPM Insights: A clear positive relationship exists: higher average heart rates during exercise correlate with higher calorie expenditure. The spread suggests that duration and other factors still modulate the total burn even at similar average intensities. Higher calorie points often correspond to HIIT/Cardio/Strength.
+
+```{r fig.width=8, fig.height=5}
+# Correlation matrix for numeric variables
+numeric_cols <- gym %>% select_if(is.numeric)
+cor_matrix <- cor(numeric_cols)
+
+# Visualize the correlation matrix
+corrplot(cor_matrix, method = "color", type = "lower", order = "hclust",
+         tl.col = "black", tl.cex = 0.7, # Text label properties
+         addCoef.col = "black", number.cex = 0.5, # Add coefficients
+         title = "Correlation Matrix of Numeric Variables", mar=c(0,0,1,0))
+```
+
+* Calories_Burned shows very strong positive correlation with Session_Duration (0.91) and Experience_Level (0.76), and strong positive correlation with Workout_Frequency (0.64). Moderate positive correlations exist with Avg_BPM (0.34), Weight (0.37), and Water_Intake (0.28). A moderate negative correlation exists with Fat_Percentage (-0.60).
+* Multicollinearity: High correlation is observed between Experience_Level and Workout_Frequency (0.84), and Session_Duration (0.69). This indicates experienced members tend to train more often and for longer. Fat_Percentage is negatively correlated with Experience_Level (-0.54) and Workout_Frequency (-0.65), suggesting more active/experienced members tend to have lower body fat.
+
+## Comperative Analysis
+
+```{r}
+# Fat Percentage vs Gender
+ggplot(gym, aes(x = Gender, y = Fat_Percentage, fill = Gender)) +
+      geom_boxplot(alpha = 0.8) +
+      labs(title = "Fat Percentage Distribution by Gender", 
+           x = "Gender", y = "Fat Percentage (%)") +
+      theme_minimal()+ coord_flip()
+
+t_test_fat <- t.test(Fat_Percentage ~ Gender, data = gym)
+cat("\nT-test results for Fat Percentage by Gender (p-value):", t_test_fat$p.value, "\n")
+
+# BMI vs Gender
+ggplot(gym, aes(x = Gender, y = BMI, fill = Gender)) +
+      geom_boxplot(alpha = 0.8) +
+      labs(title = "BMI Distribution by Gender", x = "Gender", y = "BMI") +
+      theme_minimal()+ coord_flip()
+t_test_bmi <- t.test(BMI ~ Gender, data = gym)
+cat("\nT-test results for BMI by Gender (p-value):", t_test_bmi$p.value, "\n")
+
+# Fat Percentage vs BMI colored by Gender
+ggplot(gym, aes(x = BMI, y = Fat_Percentage, color = Gender)) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "lm", se = FALSE, linewidth = 1) +
+      labs(title = "Fat Percentage vs. BMI by Gender", x = "BMI", y = "Fat Percentage (%)") +
+      theme_minimal()
+
+# Resting BPM vs BMI
+ggplot(gym, aes(x = BMI, y = Resting_BPM)) +
+      geom_point(alpha = 0.4, color = "purple") +
+      geom_smooth(method = "lm", color = "black", se = FALSE) +
+      labs(title = "Resting BPM vs. BMI", x = "BMI", y = "Resting BPM") +
+      theme_minimal()
+```
+
+**Health Metric Insights:**
+
+* Boxplots and t-tests confirm significant differences (p \< 0.001) in body composition by gender: Females show higher Fat_Percentage, while Males show slightly higher BMI.
+* The scatter plot confirms a positive relationship between BMI and Fat_Percentage for both genders, with females generally having higher fat percentage for a given BMI.
+* The relationship between BMI and Resting_BPM is very weak, almost flat, suggesting BMI alone is a poor indicator of resting heart rate in this population.
+
+## Experience Level and Workout Patterns
+
+```{r}
+# Experience Level vs Workout Frequency
+ggplot(gym, aes(x = factor(Experience_Level), y = Workout_Frequency)) +
+      geom_boxplot(fill = "orange", alpha = 0.8) +
+      labs(title = "Workout Frequency by Experience Level", x = "Experience Level", y = "Frequency (days/week)") +
+      theme_minimal()
+
+# Experience Level vs Session Duration
+ggplot(gym, aes(x = factor(Experience_Level), y = Session_Duration)) +
+       geom_boxplot(fill = "lightgreen", alpha = 0.8) +
+       labs(title = "Session Duration by Experience Level", 
+            x = "Experience Level", y = "Duration (hours)") +
+       theme_minimal()
+
+# Experience Level vs Workout Type (Proportions)
+exp_workout_prop <- gym %>%
+  count(Experience_Level, Workout_Type) %>%
+  group_by(Experience_Level) %>%
+  mutate(Proportion = n / sum(n)) %>%
+  ungroup()
+
+ggplot(exp_workout_prop, 
+       aes(x = factor(Experience_Level), 
+           y = Proportion, 
+           fill = Workout_Type)) +
+       geom_bar(stat = "identity", position = "fill", alpha = 0.8) +
+       labs(title = "Workout Type Preference by Experience Level", 
+            x = "Experience Level", 
+            y = "Proportion of Workouts") +
+       scale_y_continuous(labels = scales::percent) +
+       theme_minimal() +
+       scale_fill_brewer(palette = "Set2") # Use a color palette
+```
+
+**Experience & Habits Insights:**
+
+* There's a clear, strong positive association between Experience_Level and both Workout_Frequency and Session_Duration. Level 3 members train almost twice as often (median 5 vs 3 days/week) and significantly longer per session (median \~1.7 vs \~1.0 hours) than Level 1 members.
+* Workout type preferences show only subtle shifts: beginners (Level 1) show a slightly higher proportion of Strength workouts, while advanced members (Level 3) incorporate proportionally slightly more Cardio/HIIT. Yoga remains consistently popular across all levels.
+
+## Workout Intensity Factors
+
+```{r}
+# Calculate intensity metrics if not already done (redundant check)
+if (!("Relative_Avg_BPM" %in% names(gym))) {
+    gym <- gym %>%
+      mutate(
+        Relative_Avg_BPM = Avg_BPM / Max_BPM,
+        BPM_Above_Resting = Avg_BPM - Resting_BPM
+        )
+}
+
+# Average BPM vs Experience Level
+ggplot(gym, aes(x = factor(Experience_Level), y = Avg_BPM)) +
+       geom_boxplot(fill = "cyan", alpha = 0.8) +
+       labs(title = "Average BPM during Workout by Experience Level", 
+            x = "Experience Level", y = "Average BPM") +
+       theme_minimal()
+
+# Average BPM vs Workout Type
+ggplot(gym, aes(x = Workout_Type, y = Avg_BPM, fill=Workout_Type)) +
+       geom_boxplot(alpha = 0.8) +
+       labs(title = "Average BPM during Workout by Workout Type", x = "Workout Type", y = "Average BPM") +
+       theme_minimal() +
+       theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+**Workout Intensity Insights:**
+
+* Experience_Level does not show a meaningful relationship with Avg_BPM. The median average heart rate during workouts is remarkably similar across all experience levels (\~143 BPM).
+* Workout_Type can be used to determine average intensity. While other sessions consistently has median Avg_BPM around 142 BPM, Strength has a noticeably higher median (\~145 BPM). Strength sessions also show much wider variation, indicating these types often involve higher cardiovascular effort.
+
+# 4. Further Preprocessing
+
+Based on EDA, we select relevant features from the gym dataset for modeling Calories_Burned and split the data.
+
+**Feature Selection Justification:**
+
+* We select predictors (Session_Duration, Avg_BPM, Weight, Age, Gender, Workout_Type, Workout_Frequency, Experience_Level) based on EDA correlations, domain knowledge, and their potential significance for predicting calorie burn.
+* Variables like Height, BMI, Fat_Percentage, Max_BPM, Resting_BPM, Water_Intake are excluded due to redundancy or weaker observed relationships with Calories_Burned.
+
+```{r}
+# Define target and predictors
+target_variable <- "Calories_Burned"
+predictors <- c("Session_Duration", "Avg_BPM", "Weight", "Age", "Gender", "Workout_Type", "Workout_Frequency", "Experience_Level")
+
+# Select data for modeling from 'gym' dataframe
+gym_model_data <- gym %>% select(all_of(target_variable), all_of(predictors))
+
+cat("Selected Predictors for Models:", paste(predictors, collapse=", "), "\n")
+```
+
+## Train/Test Split
+
+Split the gym_model_data into 80% training and 20% testing using caret::createDataPartition.
+
+```{r}
+train_index <- createDataPartition(gym_model_data[[target_variable]], p = 0.8, list = FALSE, times = 1)
+
+train_gym <- gym_model_data[train_index, ]
+test_gym  <- gym_model_data[-train_index, ]
+
+cat("Training set size:", nrow(train_gym), "rows\n")
+cat("Testing set size:", nrow(test_gym), "rows\n")
+```
+
+# 5. Modelling
+
+**Modeling Plan:**
+
+Train and evaluate models using caret for linear variants and the catboost package for gradient boosting.
+
+* Linear Regression (LM): Method 'lm' via caret.
+* Ridge Regression: Method 'glmnet' (alpha=0) via caret.
+* Lasso Regression: Method 'glmnet' (alpha=1) via caret.
+* Elastic Net Regression: Method 'glmnet' (tuned alpha/lambda) via caret.
+* CatBoost Regressor: Using the catboost package directly.
+
+## Model Training Setup for Linear Models
+
+```{r}
+# Define training control: 10-fold CV
+train_control <- trainControl(method = "cv", number = 10, savePredictions = "final")
+# Define formula
+formula <- as.formula(paste(target_variable, "~ ."))
+```
+
+## Model Training
+
+Train 4 models using caret: Linear, Ridge, Lasso, Elastic Net.
+
+```{r}
+# Train Linear Regression
+set.seed(123)
+model_lm <- train(formula, data = train_gym, method = "lm", 
+                  trControl = train_control, 
+                  preProcess = c("center", "scale"))
+```
+
+```{r}
+# Train Ridge Regression
+set.seed(123)
+model_ridge <- train(formula, data = train_gym, method = "glmnet", 
+                     trControl = train_control, 
+                     tuneGrid = expand.grid(alpha = 0, lambda = 10^seq(-4, 0, length=20)),
+                     preProcess = c("center", "scale"))
+```
+
+```{r}
+# Train Lasso Regression
+set.seed(123)
+model_lasso <- train(formula, data = train_gym, method = "glmnet", 
+                     trControl = train_control, 
+                     tuneGrid = expand.grid(alpha = 1, lambda = 10^seq(-4, 0, length=20)),
+                     preProcess = c("center", "scale"))
+```
+
+```{r}
+# Train Elastic Net Regression
+set.seed(123)
+model_enet <- train(formula, data = train_gym, method = "glmnet", 
+                    trControl = train_control, tuneLength = 10, 
+                    preProcess = c("center", "scale"))
+```
+
+## Model Setup and Training for CatBoost
+
+Prepare data specifically for CatBoost
+
+```{r}
+# Separate features and target
+train_features <- train_gym %>% select(-all_of(target_variable))
+train_label <- train_gym[[target_variable]]
+
+test_features <- test_gym %>% select(-all_of(target_variable))
+test_label <- test_gym[[target_variable]]
+
+# Create CatBoost pools
+train_pool <- catboost.load_pool(data = train_features, label = train_label)
+test_pool <- catboost.load_pool(data = test_features, label = test_label)
+
+cat("CatBoost pools created.\n")
+```
+
+Train the CatBoost model
+
+```{r}
+# Define parameters (start with reasonable defaults)
+params <- list(loss_function = 'RMSE', # Objective function
+               iterations = 500,       # Number of trees 
+               learning_rate = 0.05,   # Step size shrinkage 
+               depth = 6,              # Tree depth 
+               l2_leaf_reg = 3,        # L2 regularization
+               eval_metric = 'RMSE',   # Metric for evaluation
+               random_seed = 123,
+               verbose = 150
+               )
+
+# Train the model
+model_catboost <- catboost.train(learn_pool = train_pool,
+                                 params = params)
+
+```
+
+# 6. Evaluation
+
+This section assesses the performance based on 3 metrics (RMSE, MAE and R-squared) and reliability of the predictive models developed in the previous step. The goal is to objectively measure how accurately each model predicts the target variable (`Calories_Burned`) on unseen data (the test set) and to diagnose potential issues with the models' assumptions or fit.
+
+```{r}
+# Predictions
+pred_lm   <- predict(model_lm, newdata = test_gym)
+pred_ridge <- predict(model_ridge, newdata = test_gym)
+pred_lasso <- predict(model_lasso, newdata = test_gym)
+pred_enet  <- predict(model_enet, newdata = test_gym)
+pred_catboost <- catboost.predict(model_catboost, test_pool)
+
+# Evaluation Metrics
+results_lm    <- postResample(pred = pred_lm, obs = test_gym$Calories_Burned)
+results_ridge <- postResample(pred = pred_ridge, obs = test_gym$Calories_Burned)
+results_lasso <- postResample(pred = pred_lasso, obs = test_gym$Calories_Burned)
+results_enet  <- postResample(pred = pred_enet, obs = test_gym$Calories_Burned)
+results_catboost <- postResample(pred = pred_catboost, obs = test_gym$Calories_Burned)
+
+# Combine results
+metrics_all <- data.frame(
+  Model = c("Linear Regression", "Ridge", "Lasso", "Elastic Net", "CatBoost"),
+  RMSE = c(results_lm["RMSE"], results_ridge["RMSE"], results_lasso["RMSE"], results_enet["RMSE"], results_catboost["RMSE"]),
+  MAE = c(results_lm["MAE"], results_ridge["MAE"], results_lasso["MAE"], results_enet["MAE"], results_catboost["MAE"]),
+  Rsquared = c(results_lm["Rsquared"], results_ridge["Rsquared"], results_lasso["Rsquared"], results_enet["Rsquared"], results_catboost["Rsquared"])
+)
+
+cat("\nModel Performance Comparison\n")
+metrics_all
+
+# Identify the best model based on RMSE
+best_model_index_all <- which.min(metrics_all$RMSE)
+best_model_name_eval <- metrics_all$Model[best_model_index_all]
+best_rmse_eval <- metrics_all$RMSE[best_model_index_all]
+best_mae_eval <- metrics_all$MAE[best_model_index_all]
+best_r2_eval <- metrics_all$Rsquared[best_model_index_all]
+
+cat("\nBest Model based on Test RMSE:", best_model_name_eval, "\n")
+```
+
+## Model Comparison:
+
+The performance metrics on the test set clearly show that CatBoost significantly outperforms all linear models.
+
+* CatBoost achieved an RMSE of approximately 10.1 calories, compared to the best linear models (Linear Regression, Lasso, Elastic Net) which had RMSEs around 37.4-37.5 calories.
+* Similarly, CatBoost's MAE of \~7.3 calories is substantially lower than the linear models' MAE of \~28.9 calories.
+* The R-squared for CatBoost is 0.9987, indicating it explains nearly 99.9% of the variance in the test set's calories burned, compared to \~98.1% for the linear models.
+* This superior performance strongly suggests that non-linear relationships or complex feature interactions (which CatBoost can capture) are present in the data and are important for accurately predicting calorie burn. Ridge regression performed notably worse than other linear models, possibly due to the specific lambda chosen by CV.
+
+## Residual Analysis (Best Model Overall):
+
+Analyze residuals for the best performing model - CatBoost.
+
+```{r}
+# Select the best model's predictions
+best_predictions_overall <- pred_catboost
+
+# Prepare data for plotting residuals
+test_gym_res <- test_gym 
+test_gym_res$Predictions <- as.vector(best_predictions_overall) # Convert to vector
+test_gym_res$Residuals   <- test_gym_res$Calories_Burned - test_gym_res$Predictions
+
+# Find the cut off best
+residual_sd_best <- sd(test_gym_res$Residuals)
+cutoff_best <- 2 * residual_sd_best
+
+test_gym_res <- test_gym_res %>%
+  mutate(Large_Residual = abs(Residuals) > cutoff_best)
+
+# Plot Residuals vs Fitted
+p_res_fit <- ggplot(test_gym_res, aes(x = Predictions, y = Residuals)) +
+  geom_point(aes(color = Large_Residual), alpha = 0.7) +
+  scale_color_manual(values = c("TRUE" = "red", "FALSE" = "grey50"), name = "Large Residual") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "blue") +
+  geom_hline(yintercept = c(-cutoff_best, cutoff_best), linetype = "dotted", color = "red") +
+  labs(title = paste(best_model_name_eval, ": Residuals vs. Fitted Values"),
+       subtitle = paste0("Highlighting |Residuals| > ", round(cutoff_best,1), " (2 SD)"),
+       x = "Fitted Values", y = "Residuals") +
+  theme_bw()
+print(p_res_fit)
+
+# Histogram of Residuals
+p_res_hist <- ggplot(test_gym_res, aes(x = Residuals)) +
+  geom_histogram(aes(y = after_stat(density)), 
+                 binwidth = 25, 
+                 fill = "lightblue", 
+                 color = "black", 
+                 alpha = 0.7) +
+  geom_density(color = "red", size = 1) +
+  labs(title = paste(best_model_name_eval, ": Histogram of Residuals"), 
+       x = "Residuals", y = "Density") +
+  theme_bw()
+print(p_res_hist)
+
+# Q-Q Plot of Residuals
+p_res_qq <- ggplot(test_gym_res, aes(sample = Residuals)) +
+  stat_qq(color = "blue", alpha = 0.7) +
+  stat_qq_line(color = "red", linetype = "dashed", linewidth = 1) +
+  labs(title = paste(best_model_name_eval, ": Q-Q Plot of Residuals"), x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  theme_bw()
+print(p_res_qq)
+
+cat(paste("\nNumber of points with large residuals (|Residual| >", round(cutoff_best, 1), "):", sum(test_gym_res$Large_Residual), "\n"))
+```
+
+**Residuals vs. Fitted:**
+
+* The residuals are predominantly clustered tightly around the zero line, indicating high accuracy for most predictions.
+* There is no obvious pattern, suggesting the model has captured the main relationships well and the variance of errors (homoscedasticity) is reasonably constant across the prediction range.
+* A small number of points (highlighted in red) fall outside the +/- 20.2 calorie residual band. These represent sessions where the prediction was less accurate, with errors up to \~50 calories in magnitude. These few outliers might be due to factors not included in the model (e.g., specific exercise variations within a type, unusual effort level) or minor data inconsistencies.
+
+**Histogram of Residuals:**
+
+* The histogram shows a distribution that is very sharply peaked at zero and highly symmetric.
+* This confirms that the vast majority of prediction errors are extremely small (close to zero calories).
+* The shape is much more peaked than a normal distribution, which is characteristic of a highly accurate model where most predictions are spot-on, leaving only a few larger errors in the tails.
+
+# 7. Recommendations and Final Conclusions
+
+## Summary of Findings & Problem Solutions:
+
+* Calories Burned Influences: EDA and modeling consistently identified Session Duration, Average BPM, Weight, Age, Gender, Workout Type, Frequency, and Experience Level as significant factors influencing calorie burned.
+* Predictive Modeling: CatBoost significantly outperformed linear models, achieving a very low RMSE (\~r round(best_rmse_eval, 1) calories) and explaining nearly 99.9% of the variance (R² ≈ r round(best_r2_eval, 4)) on the test set. This suggests important non-linearities or feature interactions exist that CatBoost effectively captured.
+* Health Metrics: EDA confirmed significant gender differences in Fat % and BMI. BMI showed a very weak link to Resting BPM.
+* Experience Patterns: EDA clearly showed higher experience levels correlate with higher workout frequency and longer durations.
+* Workout Intensity: EDA identified Workout Type as the primary driver of Average BPM, with Experience Level having little direct impact on session intensity.
+
+## Best Model Performance:
+
+The best overall performance on the test set was achieved by CatBoost.
+
+* Best Test Set Performance:
+    * RMSE: 10.0947
+    * MAE: 7.2888
+    * R-squared: 0.9987
+
+## Limitations and Future Work:
+
+* Outliers: A few large prediction errors remain even with CatBoost.
+* Feature Granularity: Workout_Type is broad.
+* Missing Context: Diet, sleep, etc., unobserved.
+* Hyperparameter Tuning: The current CatBoost model used default/basic parameters. Performance could likely be further improved with systematic tuning (iterations, learning rate, depth, regularization).
+
+## Future improvements could include:
+
+* Hyperparameter tuning for CatBoost using grid search, random search, or Bayesian optimization to potentially decrease the RMSE further.
+* Investigating the few large residual cases to understand why the model struggled with those specific sessions.
+* Gathering more granular data (specific exercises, diet) to enhance model inputs.
+* Comparing CatBoost with other advanced models like Random Forest or XGBoost.
+
+# 8. References
+
+Data source: <https://www.kaggle.com/datasets/valakhorasani/gym-members-exercise-dataset>
