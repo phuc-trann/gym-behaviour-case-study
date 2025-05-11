@@ -1,7 +1,7 @@
 # gym-behaviour-case-study
 Gym Member Behaviour EDA Case Study
 
-This report is based on the Kaggle dataset: *Gym Members Exercise Dataset*, available under this link [https://www.kaggle.com/datasets/valakhorasani/gym-members-exercise-dataset]
+This report is based on the Kaggle dataset: *Gym Members Exercise Dataset*, available under this [link](https://www.kaggle.com/datasets/valakhorasani/gym-members-exercise-dataset).
 
 This report details the analysis of the gym dataset, containing exercise tracking information for 973 gym member sessions. The primary goal was to understand the factors influencing workout outcomes, explore behavioral patterns, and assess the predictability of key metrics using various modeling techniques, including linear models and CatBoost gradient boosting.
 
