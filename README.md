@@ -1,5 +1,4 @@
-# gym-behaviour-case-study
-Gym Member Behaviour EDA Case Study
+# Gym Member Behaviour EDA Case Study
 
 This report is based on the Kaggle dataset: *Gym Members Exercise Dataset*, available under this [link](https://www.kaggle.com/datasets/valakhorasani/gym-members-exercise-dataset).
 
